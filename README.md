@@ -1,6 +1,6 @@
 # Pulse | Sentiment Intelligence
 
-A premium Streamlit workspace for classifying the emotional tone of text with classical machine-learning models.
+A Streamlit workspace for classifying the emotional tone of text with classical machine-learning models.
 
 [Live Demo](https://sentiment-analysis-with-machine-learning-by-ahnaf.streamlit.app/)
 
