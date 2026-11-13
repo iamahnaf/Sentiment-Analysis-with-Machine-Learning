@@ -43,12 +43,12 @@ MODEL_DETAILS = {
 }
 
 EMOTION_STYLES = {
-    "joy": ("#c8f169", "Joy", "A bright, positive emotional signal."),
-    "love": ("#ff8e88", "Love", "A warm, connected emotional signal."),
-    "surprise": ("#ffc46b", "Surprise", "An unexpected or high-energy emotional signal."),
-    "anger": ("#ff756d", "Anger", "A tense or strongly activated emotional signal."),
-    "sadness": ("#8db7ff", "Sadness", "A low-energy or reflective emotional signal."),
-    "fear": ("#c2a6ff", "Fear", "A cautious or uncertainty-driven emotional signal."),
+    "joy": ("#c8f169", "Joy", "A bright, positive emotional signal.", "😊"),
+    "love": ("#ff8e88", "Love", "A warm, connected emotional signal.", "❤️"),
+    "surprise": ("#ffc46b", "Surprise", "An unexpected or high-energy emotional signal.", "😮"),
+    "anger": ("#ff756d", "Anger", "A tense or strongly activated emotional signal.", "😠"),
+    "sadness": ("#8db7ff", "Sadness", "A low-energy or reflective emotional signal.", "😢"),
+    "fear": ("#c2a6ff", "Fear", "A cautious or uncertainty-driven emotional signal.", "😨"),
 }
 
 
@@ -188,6 +188,7 @@ st.markdown(
     .model-tag { color: var(--accent); font-family: 'DM Mono', monospace; font-size: .64rem; letter-spacing: .1em; margin-top: 1.3rem; }
     .result { border-left: 3px solid var(--result-color); background: color-mix(in srgb, var(--result-color) 9%, #191c1c); border-radius: 0 14px 14px 0; margin-top: 1.2rem; padding: 1.1rem 1.2rem; }
     .result-label { color: var(--muted); font-family: 'DM Mono', monospace; font-size: .67rem; letter-spacing: .12em; text-transform: uppercase; }
+    .result-emoji { font-size: 2rem; margin-right: .55rem; vertical-align: .08em; }
     .result-emotion { color: var(--result-color); font-size: 2rem; font-weight: 800; letter-spacing: -.05em; margin: .25rem 0; }
     .result-note { color: #c4c3bb; font-size: .82rem; margin: 0; }
     .footnote { border-top: 1px solid var(--line); color: var(--muted); font-family: 'DM Mono', monospace; font-size: .66rem; letter-spacing: .05em; margin-top: 3rem; padding-top: 1rem; }
@@ -220,7 +221,11 @@ with left_column:
     st.markdown('<div class="model-name">Analyze a message</div>', unsafe_allow_html=True)
     st.markdown('<p class="model-description">Write a sentence below and choose the lens you want to use for its emotional read.</p>', unsafe_allow_html=True)
     st.write("")
-    selected_model = st.selectbox("Model", list(trained_models))
+    selected_model = st.selectbox(
+        "Model",
+        list(trained_models),
+        index=list(trained_models).index("Logistic Regression (TF-IDF)"),
+    )
     message = st.text_area(
         "Text",
         value="I feel happy and hopeful today",
@@ -239,9 +244,9 @@ with left_column:
                 features = bow.transform([cleaned_message])
             prediction = model.predict(features)[0]
             sentiment = id_to_emotion[int(prediction)]
-            result_color, result_title, result_note = EMOTION_STYLES.get(sentiment, ("#c8f169", sentiment.title(), "Emotional signal detected."))
+            result_color, result_title, result_note, result_emoji = EMOTION_STYLES.get(sentiment, ("#c8f169", sentiment.title(), "Emotional signal detected.", "💬"))
             st.markdown(
-                f'<div class="result" style="--result-color: {result_color};"><div class="result-label">Detected emotional signal</div><div class="result-emotion">{result_title}</div><p class="result-note">{result_note} · Read with {MODEL_DETAILS[selected_model]["label"]}.</p></div>',
+                f'<div class="result" style="--result-color: {result_color};"><div class="result-label">Detected emotional signal</div><div class="result-emotion"><span class="result-emoji">{result_emoji}</span>{result_title}</div><p class="result-note">{result_note} · Read with {MODEL_DETAILS[selected_model]["label"]}.</p></div>',
                 unsafe_allow_html=True,
             )
 
