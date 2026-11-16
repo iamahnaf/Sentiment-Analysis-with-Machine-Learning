@@ -1,6 +1,8 @@
+import os
 import re
 import string
 
+import joblib
 import pandas as pd
 import streamlit as st
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
@@ -9,6 +11,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
 from sklearn.svm import LinearSVC
 
 
@@ -20,17 +23,17 @@ st.set_page_config(
 
 
 MODEL_DETAILS = {
-    "SVM (TF-IDF) [Best Model]": {
-        "label": "Support Vector Machine / TF-IDF",
-        "description": "Margin-based classifier optimized with bigrams (1, 2) and sublinear TF. Best performing model selected via 5-Fold Stratified Cross-Validation.",
-        "tag": "★ BEST MODEL SELECTED (90.2% CV F1)",
-        "params": "C=2.0 · ngram=(1,2) · sublinear_tf=True",
-    },
     "Logistic Regression (TF-IDF)": {
         "label": "Logistic Regression / TF-IDF",
-        "description": "Linear decision model tuned with unigrams + bigrams, sublinear TF scaling, and optimized L2 regularization (C=10.0).",
-        "tag": "TUNED LINEAR DECISION (89.0% CV F1)",
+        "description": "Linear decision model tuned with unigrams + bigrams, sublinear TF scaling, and optimal regularization (C=10.0). Selected as default model.",
+        "tag": "DEFAULT · TUNED LINEAR DECISION (89.0% CV F1)",
         "params": "C=10.0 · ngram=(1,2) · sublinear_tf=True",
+    },
+    "SVM (TF-IDF) [Best Model]": {
+        "label": "Support Vector Machine / TF-IDF",
+        "description": "Margin-based classifier optimized with bigrams (1, 2) and sublinear TF. Highest scoring model selected via 5-Fold Stratified Cross-Validation.",
+        "tag": "★ HIGHEST SCORING MODEL (90.2% CV F1)",
+        "params": "C=2.0 · ngram=(1,2) · sublinear_tf=True",
     },
     "Naive Bayes (BOW)": {
         "label": "Naive Bayes / BOW",
@@ -55,6 +58,8 @@ EMOTION_STYLES = {
     "fear": ("#c2a6ff", "Fear", "A cautious or uncertainty-driven emotional signal.", "😨"),
 }
 
+BUNDLE_PATH = "models_bundle.pkl"
+
 
 def clean_text(text: str) -> str:
     text = text.lower()
@@ -67,7 +72,18 @@ def clean_text(text: str) -> str:
 
 
 @st.cache_resource
-def train_models():
+def load_or_train_models():
+    # If pre-trained bundle exists, load instantly without re-training
+    if os.path.exists(BUNDLE_PATH):
+        bundle = joblib.load(BUNDLE_PATH)
+        return (
+            bundle["trained_models"],
+            bundle["id_to_emotion"],
+            bundle["metrics"],
+            bundle["best_model_name"],
+        )
+
+    # Fallback: train and cache if bundle not found
     data = pd.read_csv("data.txt", sep=";", names=["text", "emotion"])
     emotion_to_id = {emotion: index for index, emotion in enumerate(data["emotion"].unique())}
     id_to_emotion = {index: emotion for emotion, index in emotion_to_id.items()}
@@ -82,19 +98,18 @@ def train_models():
         stratify=data["label"],
     )
 
-    # Optimal configurations discovered via GridSearchCV & 5-Fold Stratified CV
     model_configs = {
-        "SVM (TF-IDF) [Best Model]": {
-            "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
-            "model": LinearSVC(C=2.0, random_state=42, dual="auto"),
-            "cv_f1_mean": 0.9016,
-            "cv_f1_std": 0.0073,
-        },
         "Logistic Regression (TF-IDF)": {
             "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
             "model": LogisticRegression(C=10.0, max_iter=1000, random_state=42),
             "cv_f1_mean": 0.8898,
             "cv_f1_std": 0.0095,
+        },
+        "SVM (TF-IDF) [Best Model]": {
+            "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
+            "model": LinearSVC(C=2.0, random_state=42, dual="auto"),
+            "cv_f1_mean": 0.9016,
+            "cv_f1_std": 0.0073,
         },
         "Naive Bayes (BOW)": {
             "vectorizer": CountVectorizer(ngram_range=(1, 2), min_df=3),
@@ -117,39 +132,43 @@ def train_models():
         vec = config["vectorizer"]
         model = config["model"]
 
-        # Fit vectorizer and train model
         train_features = vec.fit_transform(x_train)
         test_features = vec.transform(x_test)
         model.fit(train_features, y_train)
 
-        prediction = model.predict(test_features)
-        trained_models[name] = (model, vec)
+        pipe = Pipeline([("vectorizer", vec), ("classifier", model)])
+        trained_models[name] = pipe
 
+        prediction = model.predict(test_features)
         comparison_rows.append(
             {
                 "Model": name,
                 "Mean CV F1": config["cv_f1_mean"],
                 "CV F1 Std": config["cv_f1_std"],
-                "Accuracy": accuracy_score(y_test, prediction),
-                "Precision": precision_score(
-                    y_test, prediction, average="weighted", zero_division=0
+                "Accuracy": float(accuracy_score(y_test, prediction)),
+                "Precision": float(
+                    precision_score(y_test, prediction, average="weighted", zero_division=0)
                 ),
-                "Recall": recall_score(
-                    y_test, prediction, average="weighted", zero_division=0
+                "Recall": float(
+                    recall_score(y_test, prediction, average="weighted", zero_division=0)
                 ),
-                "F1 Score": f1_score(
-                    y_test, prediction, average="weighted", zero_division=0
+                "F1 Score": float(
+                    f1_score(y_test, prediction, average="weighted", zero_division=0)
                 ),
             }
         )
 
-    comparison = (
-        pd.DataFrame(comparison_rows)
-        .sort_values("Mean CV F1", ascending=False)
-        .reset_index(drop=True)
-    )
+    comparison = pd.DataFrame(comparison_rows).sort_values("Mean CV F1", ascending=False).reset_index(drop=True)
     metrics = comparison.set_index("Model").to_dict("index")
     best_model_name = comparison.iloc[0]["Model"]
+
+    bundle = {
+        "trained_models": trained_models,
+        "id_to_emotion": id_to_emotion,
+        "metrics": metrics,
+        "best_model_name": best_model_name,
+    }
+    joblib.dump(bundle, BUNDLE_PATH)
 
     return trained_models, id_to_emotion, metrics, best_model_name
 
@@ -228,21 +247,26 @@ st.markdown(
 
 
 try:
-    trained_models, id_to_emotion, metrics, best_model_name = train_models()
+    trained_models, id_to_emotion, metrics, best_model_name = load_or_train_models()
 except FileNotFoundError:
-    st.error("data.txt was not found. Place it next to app.py and restart the app.")
+    st.error("Neither models_bundle.pkl nor data.txt was found. Place data.txt or models_bundle.pkl next to app.py.")
     st.stop()
 
 st.markdown('<div class="eyebrow">PULSE / SENTIMENT INTELLIGENCE</div>', unsafe_allow_html=True)
 hero_left, hero_right = st.columns([1.8, 1], vertical_alignment="bottom")
 with hero_left:
     st.title("Read the feeling\nbehind the words.")
-    st.markdown('<p class="hero-copy">A focused workspace for turning everyday language into a clear emotional signal, powered by four classical machine-learning models tuned with 5-Fold Stratified Cross-Validation.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-copy">A focused workspace for turning everyday language into a clear emotional signal, powered by classical machine-learning models tuned with 5-Fold Stratified Cross-Validation.</p>', unsafe_allow_html=True)
 with hero_right:
-    st.markdown(f'<div class="status"><i></i> Best Model: {best_model_name.split("[")[0].strip()} · 90.2% CV F1</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="status"><i></i> Models Loaded (Instant Start)</div>', unsafe_allow_html=True)
 
 st.write("")
 left_column, right_column = st.columns([1.15, .85], gap="large")
+
+# Default model is Logistic Regression (TF-IDF)
+default_model_name = "Logistic Regression (TF-IDF)"
+model_names = list(trained_models.keys())
+default_index = model_names.index(default_model_name) if default_model_name in model_names else 0
 
 with left_column:
     st.markdown('<div class="panel-kicker">01 / Compose signal</div>', unsafe_allow_html=True)
@@ -251,8 +275,8 @@ with left_column:
     st.write("")
     selected_model = st.selectbox(
         "Model",
-        list(trained_models),
-        index=list(trained_models).index(best_model_name),
+        model_names,
+        index=default_index,
     )
     message = st.text_area(
         "Text",
@@ -265,10 +289,9 @@ with left_column:
         if not message.strip():
             st.warning("Enter a message first.")
         else:
-            model, vec = trained_models[selected_model]
+            pipe = trained_models[selected_model]
             cleaned_message = clean_text(message)
-            features = vec.transform([cleaned_message])
-            prediction = model.predict(features)[0]
+            prediction = pipe.predict([cleaned_message])[0]
             sentiment = id_to_emotion[int(prediction)]
             result_color, result_title, result_note, result_emoji = EMOTION_STYLES.get(sentiment, ("#c8f169", sentiment.title(), "Emotional signal detected.", "💬"))
             st.markdown(
@@ -291,4 +314,4 @@ with right_column:
     metric_bottom[1].metric("Precision", f'{selected_metrics["Precision"]:.3f}')
     metric_bottom[2].metric("Recall", f'{selected_metrics["Recall"]:.3f}')
 
-st.markdown('<div class="footnote">TRAINED FROM DATA.TXT · 5-FOLD STRATIFIED CV ON 80% TRAIN SPLIT · EVALUATED ON 20% HELD-OUT TEST SPLIT</div>', unsafe_allow_html=True)
+st.markdown('<div class="footnote">PRE-TRAINED ARTIFACTS · 5-FOLD STRATIFIED CV ON 80% TRAIN SPLIT · EVALUATED ON 20% HELD-OUT TEST SPLIT</div>', unsafe_allow_html=True)
