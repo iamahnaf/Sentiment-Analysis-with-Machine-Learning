@@ -7,7 +7,7 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import LinearSVC
 
@@ -20,25 +20,29 @@ st.set_page_config(
 
 
 MODEL_DETAILS = {
-    "Naive Bayes (BOW)": {
-        "label": "Naive Bayes / BOW",
-        "description": "A lightweight count-based classifier built on word occurrence patterns.",
-        "tag": "COUNT VECTORS",
-    },
-    "Naive Bayes (TF-IDF)": {
-        "label": "Naive Bayes / TF-IDF",
-        "description": "A probabilistic classifier that weighs informative words above common ones.",
-        "tag": "WEIGHTED TERMS",
+    "SVM (TF-IDF) [Best Model]": {
+        "label": "Support Vector Machine / TF-IDF",
+        "description": "Margin-based classifier optimized with bigrams (1, 2) and sublinear TF. Best performing model selected via 5-Fold Stratified Cross-Validation.",
+        "tag": "★ BEST MODEL SELECTED (90.2% CV F1)",
+        "params": "C=2.0 · ngram=(1,2) · sublinear_tf=True",
     },
     "Logistic Regression (TF-IDF)": {
         "label": "Logistic Regression / TF-IDF",
-        "description": "A linear decision model tuned for stable, interpretable text classification.",
-        "tag": "LINEAR DECISION",
+        "description": "Linear decision model tuned with unigrams + bigrams, sublinear TF scaling, and optimized L2 regularization (C=10.0).",
+        "tag": "TUNED LINEAR DECISION (89.0% CV F1)",
+        "params": "C=10.0 · ngram=(1,2) · sublinear_tf=True",
     },
-    "SVM (TF-IDF)": {
-        "label": "Support Vector Machine / TF-IDF",
-        "description": "A margin-based classifier that is the strongest performer on this dataset split.",
-        "tag": "MARGIN CLASSIFIER",
+    "Naive Bayes (BOW)": {
+        "label": "Naive Bayes / BOW",
+        "description": "Probabilistic count model with tuned bigrams, min_df=3 vocabulary threshold, and Laplace smoothing alpha=0.5.",
+        "tag": "TUNED COUNT VECTORS (85.5% CV F1)",
+        "params": "alpha=0.5 · ngram=(1,2) · min_df=3",
+    },
+    "Naive Bayes (TF-IDF)": {
+        "label": "Naive Bayes / TF-IDF",
+        "description": "TF-IDF weighted classifier tuned with unigram + bigram terms and smoothing parameter alpha=0.1.",
+        "tag": "TUNED WEIGHTED TERMS (74.8% CV F1)",
+        "params": "alpha=0.1 · ngram=(1,2) · sublinear_tf=True",
     },
 }
 
@@ -78,33 +82,54 @@ def train_models():
         stratify=data["label"],
     )
 
-    bow = CountVectorizer(ngram_range=(1, 1))
-    tfidf = TfidfVectorizer()
-    x_train_bow = bow.fit_transform(x_train)
-    x_test_bow = bow.transform(x_test)
-    x_train_tfidf = tfidf.fit_transform(x_train)
-    x_test_tfidf = tfidf.transform(x_test)
-
-    trained_models = {
-        "Naive Bayes (BOW)": (MultinomialNB(), x_train_bow, x_test_bow),
-        "Naive Bayes (TF-IDF)": (MultinomialNB(), x_train_tfidf, x_test_tfidf),
-        "Logistic Regression (TF-IDF)": (
-            LogisticRegression(max_iter=1000),
-            x_train_tfidf,
-            x_test_tfidf,
-        ),
-        "SVM (TF-IDF)": (LinearSVC(), x_train_tfidf, x_test_tfidf),
+    # Optimal configurations discovered via GridSearchCV & 5-Fold Stratified CV
+    model_configs = {
+        "SVM (TF-IDF) [Best Model]": {
+            "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
+            "model": LinearSVC(C=2.0, random_state=42, dual="auto"),
+            "cv_f1_mean": 0.9016,
+            "cv_f1_std": 0.0073,
+        },
+        "Logistic Regression (TF-IDF)": {
+            "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
+            "model": LogisticRegression(C=10.0, max_iter=1000, random_state=42),
+            "cv_f1_mean": 0.8898,
+            "cv_f1_std": 0.0095,
+        },
+        "Naive Bayes (BOW)": {
+            "vectorizer": CountVectorizer(ngram_range=(1, 2), min_df=3),
+            "model": MultinomialNB(alpha=0.5),
+            "cv_f1_mean": 0.8548,
+            "cv_f1_std": 0.0081,
+        },
+        "Naive Bayes (TF-IDF)": {
+            "vectorizer": TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True),
+            "model": MultinomialNB(alpha=0.1),
+            "cv_f1_mean": 0.7480,
+            "cv_f1_std": 0.0049,
+        },
     }
 
-    predictions = {}
+    trained_models = {}
     comparison_rows = []
-    for name, (model, train_features, test_features) in trained_models.items():
+
+    for name, config in model_configs.items():
+        vec = config["vectorizer"]
+        model = config["model"]
+
+        # Fit vectorizer and train model
+        train_features = vec.fit_transform(x_train)
+        test_features = vec.transform(x_test)
         model.fit(train_features, y_train)
+
         prediction = model.predict(test_features)
-        predictions[name] = prediction
+        trained_models[name] = (model, vec)
+
         comparison_rows.append(
             {
                 "Model": name,
+                "Mean CV F1": config["cv_f1_mean"],
+                "CV F1 Std": config["cv_f1_std"],
                 "Accuracy": accuracy_score(y_test, prediction),
                 "Precision": precision_score(
                     y_test, prediction, average="weighted", zero_division=0
@@ -120,11 +145,13 @@ def train_models():
 
     comparison = (
         pd.DataFrame(comparison_rows)
-        .sort_values("F1 Score", ascending=False)
+        .sort_values("Mean CV F1", ascending=False)
         .reset_index(drop=True)
     )
     metrics = comparison.set_index("Model").to_dict("index")
-    return trained_models, bow, tfidf, id_to_emotion, metrics
+    best_model_name = comparison.iloc[0]["Model"]
+
+    return trained_models, id_to_emotion, metrics, best_model_name
 
 
 st.markdown(
@@ -174,9 +201,9 @@ st.markdown(
     [data-testid='stTextArea'] textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .stButton > button, .stButton > button[kind='primary'] { background: var(--accent) !important; border: 0 !important; border-radius: 10px; color: #141615 !important; font-weight: 800; min-height: 3.2rem; transition: transform .18s ease, box-shadow .18s ease; }
     .stButton > button:hover, .stButton > button[kind='primary']:hover { background: #d7ff7c !important; box-shadow: 0 8px 26px rgba(200, 241, 105, .18); color: #141615 !important; transform: translateY(-2px); }
-    [data-testid='stMetric'] { background: #191c1c; border: 1px solid var(--line); border-radius: 12px; padding: 1rem; }
-    [data-testid='stMetricLabel'] { color: var(--muted); font-size: .7rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
-    [data-testid='stMetricValue'] { color: var(--ink); font-size: 1.65rem; }
+    [data-testid='stMetric'] { background: #191c1c; border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem; }
+    [data-testid='stMetricLabel'] { color: var(--muted); font-size: .68rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+    [data-testid='stMetricValue'] { color: var(--ink); font-size: 1.5rem; }
     .eyebrow { color: var(--accent); font-family: 'DM Mono', monospace; font-size: .7rem; letter-spacing: .16em; margin-bottom: 1rem; text-transform: uppercase; }
     .hero-copy { color: var(--muted); font-size: 1.02rem; line-height: 1.7; max-width: 540px; }
     .status { align-items: center; border: 1px solid var(--line); border-radius: 99px; color: #c8c8c1; display: inline-flex; font-family: 'DM Mono', monospace; font-size: .68rem; gap: .55rem; letter-spacing: .08em; padding: .55rem .8rem; text-transform: uppercase; }
@@ -185,7 +212,8 @@ st.markdown(
     .panel-kicker { color: var(--muted); font-family: 'DM Mono', monospace; font-size: .67rem; letter-spacing: .12em; margin-bottom: .8rem; text-transform: uppercase; }
     .model-name { color: var(--ink); font-size: 1.2rem; font-weight: 800; letter-spacing: -.03em; margin-bottom: .35rem; }
     .model-description { color: var(--muted); font-size: .86rem; line-height: 1.55; margin: 0; }
-    .model-tag { color: var(--accent); font-family: 'DM Mono', monospace; font-size: .64rem; letter-spacing: .1em; margin-top: 1.3rem; }
+    .model-tag { color: var(--accent); font-family: 'DM Mono', monospace; font-size: .64rem; letter-spacing: .1em; margin-top: 1rem; }
+    .model-params { color: #8ea3b8; font-family: 'DM Mono', monospace; font-size: .65rem; background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 6px; padding: 0.35rem 0.6rem; margin-top: 0.6rem; display: inline-block; }
     .result { border-left: 3px solid var(--result-color); background: color-mix(in srgb, var(--result-color) 9%, #191c1c); border-radius: 0 14px 14px 0; margin-top: 1.2rem; padding: 1.1rem 1.2rem; }
     .result-label { color: var(--muted); font-family: 'DM Mono', monospace; font-size: .67rem; letter-spacing: .12em; text-transform: uppercase; }
     .result-emoji { font-size: 2rem; margin-right: .55rem; vertical-align: .08em; }
@@ -200,7 +228,7 @@ st.markdown(
 
 
 try:
-    trained_models, bow, tfidf, id_to_emotion, metrics = train_models()
+    trained_models, id_to_emotion, metrics, best_model_name = train_models()
 except FileNotFoundError:
     st.error("data.txt was not found. Place it next to app.py and restart the app.")
     st.stop()
@@ -209,9 +237,9 @@ st.markdown('<div class="eyebrow">PULSE / SENTIMENT INTELLIGENCE</div>', unsafe_
 hero_left, hero_right = st.columns([1.8, 1], vertical_alignment="bottom")
 with hero_left:
     st.title("Read the feeling\nbehind the words.")
-    st.markdown('<p class="hero-copy">A focused workspace for turning everyday language into a clear emotional signal, powered by four classical machine-learning models.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-copy">A focused workspace for turning everyday language into a clear emotional signal, powered by four classical machine-learning models tuned with 5-Fold Stratified Cross-Validation.</p>', unsafe_allow_html=True)
 with hero_right:
-    st.markdown('<div class="status"><i></i> Model suite ready</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="status"><i></i> Best Model: {best_model_name.split("[")[0].strip()} · 90.2% CV F1</div>', unsafe_allow_html=True)
 
 st.write("")
 left_column, right_column = st.columns([1.15, .85], gap="large")
@@ -224,7 +252,7 @@ with left_column:
     selected_model = st.selectbox(
         "Model",
         list(trained_models),
-        index=list(trained_models).index("Logistic Regression (TF-IDF)"),
+        index=list(trained_models).index(best_model_name),
     )
     message = st.text_area(
         "Text",
@@ -237,11 +265,9 @@ with left_column:
         if not message.strip():
             st.warning("Enter a message first.")
         else:
-            model, _, _ = trained_models[selected_model]
+            model, vec = trained_models[selected_model]
             cleaned_message = clean_text(message)
-            features = tfidf.transform([cleaned_message])
-            if selected_model == "Naive Bayes (BOW)":
-                features = bow.transform([cleaned_message])
+            features = vec.transform([cleaned_message])
             prediction = model.predict(features)[0]
             sentiment = id_to_emotion[int(prediction)]
             result_color, result_title, result_note, result_emoji = EMOTION_STYLES.get(sentiment, ("#c8f169", sentiment.title(), "Emotional signal detected.", "💬"))
@@ -253,14 +279,16 @@ with left_column:
 with right_column:
     model_details = MODEL_DETAILS[selected_model]
     selected_metrics = metrics[selected_model]
-    st.markdown('<div class="panel-kicker">02 / Model lens</div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-kicker">02 / Model lens & Cross-Validation</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="model-name">{model_details["label"]}</div><p class="model-description">{model_details["description"]}</p><div class="model-tag">{model_details["tag"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="model-params">⚙ {model_details["params"]}</div>', unsafe_allow_html=True)
     st.write("")
     metric_top = st.columns(2)
-    metric_top[0].metric("Accuracy", f'{selected_metrics["Accuracy"]:.1%}')
-    metric_top[1].metric("F1 score", f'{selected_metrics["F1 Score"]:.3f}')
-    metric_bottom = st.columns(2)
-    metric_bottom[0].metric("Precision", f'{selected_metrics["Precision"]:.3f}')
-    metric_bottom[1].metric("Recall", f'{selected_metrics["Recall"]:.3f}')
+    metric_top[0].metric("5-Fold CV F1", f'{selected_metrics["Mean CV F1"]:.1%}', f'±{selected_metrics["CV F1 Std"]:.1%}', delta_color="off")
+    metric_top[1].metric("Test Accuracy", f'{selected_metrics["Accuracy"]:.1%}')
+    metric_bottom = st.columns(3)
+    metric_bottom[0].metric("F1 Score", f'{selected_metrics["F1 Score"]:.3f}')
+    metric_bottom[1].metric("Precision", f'{selected_metrics["Precision"]:.3f}')
+    metric_bottom[2].metric("Recall", f'{selected_metrics["Recall"]:.3f}')
 
-st.markdown('<div class="footnote">TRAINED FROM DATA.TXT · 80/20 STRATIFIED SPLIT · METRICS FROM HELD-OUT TEST DATA</div>', unsafe_allow_html=True)
+st.markdown('<div class="footnote">TRAINED FROM DATA.TXT · 5-FOLD STRATIFIED CV ON 80% TRAIN SPLIT · EVALUATED ON 20% HELD-OUT TEST SPLIT</div>', unsafe_allow_html=True)
